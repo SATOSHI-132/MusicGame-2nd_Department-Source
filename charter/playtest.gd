@@ -1179,6 +1179,8 @@ func _start_recording() -> void:
 		"cursor_scale": _preview.cursor_scale,
 		"note_skin": _preview.note_skin,
 		"hit_fx": _preview.hit_fx_style,
+		# 上游新加的「打击音色」：回放时沿用录制时的，声音才对得上。
+		"hit_sfx": String(_app.hit_sfx_style) if _app != null else "default",
 		"rate": 1.0,
 	}
 	_record_offset = _active_offset()
@@ -1222,6 +1224,8 @@ func _enter_replay(data: Replay) -> void:
 		_preview.note_skin = String(data.settings["note_skin"])
 	if data.settings.has("hit_fx"):
 		_preview.hit_fx_style = String(data.settings["hit_fx"])
+	if data.settings.has("hit_sfx") and _sfx != null:
+		_sfx.set_style(String(data.settings["hit_sfx"]))
 	for event in _replay_events:
 		if String(event.get("k", "")) == "move":
 			_replay_cursor = Vector2(float(event.get("x", 0.0)), float(event.get("y", 0.0)))
