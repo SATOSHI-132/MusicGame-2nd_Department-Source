@@ -231,8 +231,6 @@ const EXPORT_VIDEO_SIZE := Vector2i(1280, 720)
 ## 逐帧截取的帧率；视频时间轴 = 帧号 / 帧率。
 const CAPTURE_FPS := 60
 const CAPTURE_DIR := "user://export_frames"
-## 打完自动渲一份放在这里，退出试玩时删掉。
-const AUTO_VIDEO := "user://auto_replay.mp4"
 var _export_button: Button
 var _export_dialog: FileDialog = null
 var _export_stage: int = 0
@@ -252,11 +250,6 @@ var _export_window: AcceptDialog = null
 var _export_label: Label = null
 var _export_bar: ProgressBar = null
 var _export_total_ms: float = 1.0
-## 自动后台渲染：录完的视频先放 user://，点保存才拷出去。
-var _auto_quiet: bool = false
-var _auto_active: bool = false
-var _auto_ready: bool = false
-var _saving_auto: bool = false
 var _toast_label: Label = null
 var _toast_tween: Tween = null
 ## 暂停菜单（ESC）。
@@ -1091,10 +1084,6 @@ func _start_audio() -> void:
 
 func _process(delta: float) -> void:
 	_tick_export(delta)
-	# 自动渲染时按 ESC 就跳过，不用等到渲完。
-	if _capture_mode and _auto_quiet and Input.is_action_just_pressed("ui_cancel"):
-		_cancel_export()
-		return
 	if _ready_layer != null and _ready_layer.visible:
 		_process_ready(delta)
 		return
@@ -1367,8 +1356,6 @@ func _export_video() -> void:
 	if _ffmpeg_path().is_empty():
 		_notify_result("导出视频需要 ffmpeg；当前 PATH 中找不到 ffmpeg。")
 		return
-	# 结算页已经自动渲好了：这次点保存只是拷文件，不用再等一遍。
-	_saving_auto = _auto_ready and FileAccess.file_exists(ProjectSettings.globalize_path(AUTO_VIDEO))
 	if _export_dialog == null:
 		_export_dialog = FileDialog.new()
 		_export_dialog.use_native_dialog = true
@@ -1376,71 +1363,11 @@ func _export_video() -> void:
 		_export_dialog.access = FileDialog.ACCESS_FILESYSTEM
 		_export_dialog.title = "导出回放视频"
 		_export_dialog.add_filter("*.mp4", "MP4 视频")
-		_export_dialog.file_selected.connect(_on_export_path_chosen)
+		_export_dialog.file_selected.connect(_start_capture_export)
 		add_child(_export_dialog)
 	_export_dialog.current_dir = OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS)
 	_export_dialog.current_file = _replay_file_name().get_basename() + ".mp4"
 	_export_dialog.popup_centered()
-
-
-## 保存框选好路径后：有现成的视频就拷贝，否则现场渲染。
-func _on_export_path_chosen(path: String) -> void:
-	if _saving_auto:
-		_saving_auto = false
-		_save_auto_video(path)
-		return
-	_start_capture_export(path)
-
-
-## 把自动渲染好的视频拷到用户选的位置（秒完成）。
-func _save_auto_video(path: String) -> void:
-	var src := ProjectSettings.globalize_path(AUTO_VIDEO)
-	if not path.to_lower().ends_with(".mp4"):
-		path += ".mp4"
-	if not FileAccess.file_exists(src):
-		# 理论上不会：文件被删了就退回现场渲染。
-		_auto_ready = false
-		_start_capture_export(path)
-		return
-	var err := DirAccess.copy_absolute(src, path)
-	if err != OK:
-		_notify_result("保存失败：%s" % error_string(err))
-		return
-	_notify_result("视频已保存：%s" % path.get_file())
-
-
-## 一局打完后自动渲一份视频：不弹窗、退出即删，点保存只是拷出去。
-func _start_auto_export() -> void:
-	if _auto_active or _export_stage != 0 or _ffmpeg_path().is_empty():
-		return
-	if _record == null or _record.event_count() == 0:
-		return
-	var temp := ProjectSettings.globalize_path(AUTO_VIDEO)
-	if FileAccess.file_exists(temp):
-		DirAccess.remove_absolute(temp)
-	_auto_active = true
-	_auto_ready = false
-	if _export_button != null:
-		_export_button.text = "保存回放视频"
-	_notify_result("正在生成本局回放视频…（按 ESC 取消）")
-	_start_capture_export(temp, true)
-
-
-## 退出这一局/这个界面时把自动视频丢掉，不在磁盘上留东西。
-func _drop_auto_video() -> void:
-	_auto_ready = false
-	_auto_active = false
-	_auto_quiet = false
-	_saving_auto = false
-	if _export_button != null:
-		_export_button.text = "导出视频"
-	var temp := ProjectSettings.globalize_path(AUTO_VIDEO)
-	if FileAccess.file_exists(temp):
-		DirAccess.remove_absolute(temp)
-
-
-func _exit_tree() -> void:
-	_drop_auto_video()
 
 
 ## ffmpeg 走 MediaIO 那一套：它认设置里配的路径，找不到就回 PATH。
@@ -1448,7 +1375,7 @@ func _ffmpeg_path() -> String:
 	return MediaIO.ffmpeg_exe if MediaIO.has_ffmpeg() else ""
 
 
-func _start_capture_export(path: String, quiet: bool = false) -> void:
+func _start_capture_export(path: String) -> void:
 	var data := _current_replay()
 	if data == null or _export_stage != 0:
 		return
@@ -1474,21 +1401,18 @@ func _start_capture_export(path: String, quiet: bool = false) -> void:
 	DirAccess.make_dir_recursive_absolute(_capture_dir)
 	_capture_audio = _export_audio_file()
 	_export_stage = 1
-	_auto_quiet = quiet
 	# 进度窗必须是独立系统窗口，否则它会被截进视频里。
-	# 自动渲染不弹窗：结算页上直接显示进度提示，别抢焦点。
 	var root_window := get_window()
 	if root_window != null:
 		root_window.gui_embed_subwindows = false
-	if not quiet:
-		_ensure_export_window()
-		_export_window.title = "导出回放视频"
-		_export_bar.value = 0.0
-		_export_label.text = "准备渲染…"
-		var ok_button := _export_window.get_ok_button()
-		if ok_button != null:
-			ok_button.visible = false
-		_export_window.popup_centered(Vector2i(520, 170))
+	_ensure_export_window()
+	_export_window.title = "导出回放视频"
+	_export_bar.value = 0.0
+	_export_label.text = "准备渲染…"
+	var ok_button := _export_window.get_ok_button()
+	if ok_button != null:
+		ok_button.visible = false
+	_export_window.popup_centered(Vector2i(520, 170))
 	# 同一进程里把这一局当回放重放一遍，逐帧截图——不再开第二个进程。
 	_restart_for_capture(data)
 	_capture_total = maxi(1, int(ceil((_replay_total_ms - _replay_start_ms) / 1000.0 * float(CAPTURE_FPS))))
@@ -1713,16 +1637,6 @@ func _poll_encode_stage() -> void:
 		DirAccess.rename_absolute(_capture_mp4, _export_mp4)
 	_cleanup_export_files(false)
 	_export_stage = 0
-	if _auto_quiet:
-		# 自动渲染完成：文件留在 user://，结算页上提示一下就行。
-		_auto_quiet = false
-		_auto_active = false
-		_auto_ready = true
-		_restore_after_capture()
-		if _export_button != null:
-			_export_button.text = "保存回放视频"
-		_notify_result("本局视频已生成，点「保存回放视频」直接存")
-		return
 	_restore_after_capture()
 	if _export_bar != null:
 		_export_bar.value = 100.0
@@ -1820,8 +1734,6 @@ func _cancel_export() -> void:
 	_export_stage = 0
 	_restore_after_capture()
 	_notify_result("已取消导出")
-	_auto_active = false
-	_auto_quiet = false
 	get_tree().create_timer(0.5).timeout.connect(func() -> void:
 		_cleanup_export_files(true))
 
@@ -3552,9 +3464,6 @@ func _finish() -> void:
 	if export_mode:
 		# 导出途中被 _finish 撞上（正常不会）：别把结算页录进去。
 		_results.visible = false
-	# 打完自动渲一份视频：不占游玩帧率，只在结算页面上跑，退出就删。
-	if not auto_play and not replay_mode and not bench_mode and not export_mode:
-		_start_auto_export()
 
 
 ## 一次修一张：把「本局平均偏差」反向加到这张谱面的 offset 并存盘。
