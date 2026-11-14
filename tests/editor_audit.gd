@@ -259,6 +259,7 @@ func _audit_source() -> void:
 	var canvas_text := FileAccess.get_file_as_string("res://charter/chart_canvas.gd")
 	var preview_text := FileAccess.get_file_as_string("res://charter/preview_3d.gd")
 	var inspector_text := FileAccess.get_file_as_string("res://charter/inspector.gd")
+	var workspace_text := FileAccess.get_file_as_string("res://charter/ring_workspace.gd")
 	_check("工具 1–7", main_text.contains("KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7"))
 	_check("边界 B/事件 E", main_text.contains("KEY_B") and main_text.contains("KEY_E"))
 	_check("HUD H", main_text.contains("KEY_H"))
@@ -276,6 +277,9 @@ func _audit_source() -> void:
 	_check("Ctrl+滚轮缩放", canvas_text.contains("MOUSE_BUTTON_WHEEL"))
 	_check("Alt+单击重叠循环", canvas_text.contains("alt_pressed"))
 	_check("K 形变关键帧快捷键", main_text.contains("KEY_K"))
+	# 回归：第二次打开环编辑器时预览必须重新挂进工作区，否则预览槽为空、
+	# 关闭后主界面也回不来。
+	_check("环编辑器可重复打开", not workspace_text.contains("preview != _preview"))
 	_check("X 擦除快捷键", main_text.contains("KEY_X"))
 	_check("Ctrl+Shift+V 视频属性", main_text.contains("KEY_V") and main_text.contains("ctrl_pressed") and main_text.contains("shift_pressed"))
 	_check("Anchor 双锚点创建", inspector_text.contains("_add_anchor_pair"))

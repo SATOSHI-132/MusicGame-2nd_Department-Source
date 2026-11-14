@@ -737,6 +737,9 @@ func _update_transform(beat: float) -> bool:
 
 
 func _update_camera_fit(chart: Chart, zoom: float, ellipse: float) -> void:
+	# 环工作区开关会把预览在两个容器间搬动，搬家途中 resized 先到、节点还没入树。
+	if not is_inside_tree() or _camera == null or not _camera.is_inside_tree():
+		return
 	if _max_design_radius < 0.0:
 		_max_design_radius = 520.0
 		for shape in chart.sorted_shapes():

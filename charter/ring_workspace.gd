@@ -733,14 +733,17 @@ func _build() -> void:
 ## 复用主预览：把同一个 Preview3D 挪进来，省掉第二个 3D 视口。
 func open_workspace(preview: Preview3D = null, restore: Callable = Callable()) -> void:
 	visible = true
-	if preview != null and preview != _preview:
-		if preview.get_parent() != null:
-			preview.get_parent().remove_child(preview)
+	# 每次打开都要把预览搬进来并重新记下恢复回调：关闭时预览会回到主界面，
+	# 只搬第一次的话，第二次打开预览槽是空的，关闭时也没人把主界面显示回来。
+	if preview != null:
+		if preview.get_parent() != _preview_slot:
+			if preview.get_parent() != null:
+				preview.get_parent().remove_child(preview)
+			_preview_slot.add_child(preview)
+			preview.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_preview = preview
-		_preview_slot.add_child(_preview)
-		_preview.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_restore_preview = restore
 	if _preview != null:
 		_preview.ring_edit_mode = true

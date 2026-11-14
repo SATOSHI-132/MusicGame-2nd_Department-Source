@@ -148,6 +148,7 @@ var _playtest_star: SpinBox = null
 var _playtest_cursor: SpinBox = null
 var _playtest_offset: SpinBox = null
 var _playtest_latency: SpinBox = null
+var _playtest_sfx: OptionButton = null
 var _playtest_dynamic: CheckBox = null
 var _playtest_auto: CheckBox = null
 var _playtest_mouse: CheckBox = null
@@ -163,6 +164,8 @@ var _editor_flow_spin: SpinBox = null
 ## 制谱界面保留的「星显」输入框，和试玩设置共用同一个值。
 var _cursor_u: float = 0.0
 var _issues: Array = []
+## 所有音量滑条（编辑器音频弹窗 + 设置 + 试玩设置），打开面板时统一同步。
+var _volume_sliders: Array = []
 
 
 func _ready() -> void:
@@ -1320,6 +1323,10 @@ func _setup_audio_buses() -> void:
 		var index := AudioServer.bus_count - 1
 		AudioServer.set_bus_name(index, bus_name)
 		AudioServer.set_bus_send(index, "Master")
+	# 总线由这里创建，所以保存的音量也在这里恢复（App 先于主场景初始化）。
+	if _app != null:
+		_set_bus_volume("Music", _app.music_volume)
+		_set_bus_volume("SFX", _app.sfx_volume)
 
 
 func _set_bus_volume(bus_name: String, value: float) -> void:
@@ -1329,6 +1336,33 @@ func _set_bus_volume(bus_name: String, value: float) -> void:
 	var linear := clampf(value / 100.0, 0.0, 1.0)
 	AudioServer.set_bus_volume_db(index, linear_to_db(maxf(0.0001, linear)))
 	AudioServer.set_bus_mute(index, linear <= 0.001)
+
+
+## 把总线当前音量反算回 0–100，滑条重新打开时不会跳回 100。
+func _bus_volume_percent(bus_name: String) -> float:
+	var index := AudioServer.get_bus_index(bus_name)
+	if index < 0 or AudioServer.is_bus_mute(index):
+		return 0.0
+	return clampf(db_to_linear(AudioServer.get_bus_volume_db(index)) * 100.0, 0.0, 100.0)
+
+
+func _store_volume(bus_name: String, value: float) -> void:
+	if _app == null:
+		return
+	if bus_name == "Music":
+		_app.music_volume = clampf(value, 0.0, 100.0)
+	elif bus_name == "SFX":
+		_app.sfx_volume = clampf(value, 0.0, 100.0)
+	else:
+		return
+	_app.save_settings()
+
+
+func _sync_volume_sliders() -> void:
+	for entry in _volume_sliders:
+		var slider: HSlider = entry.get("slider")
+		if is_instance_valid(slider):
+			slider.set_value_no_signal(_bus_volume_percent(String(entry.get("bus", ""))))
 
 
 func _build_audio_popup() -> void:
@@ -1368,6 +1402,7 @@ func _build_audio_popup() -> void:
 func _show_audio_popup(button: Button) -> void:
 	if _audio_popup == null:
 		return
+	_sync_volume_sliders()
 	var size := Vector2i(250, 190)
 	var at := Vector2i(button.global_position.x, button.global_position.y - size.y - 6)
 	_audio_popup.popup(Rect2i(at, size))
@@ -1387,12 +1422,16 @@ func _volume_slider(label_text: String, bus_name: String) -> HBoxContainer:
 	slider.min_value = 0.0
 	slider.max_value = 100.0
 	slider.step = 1.0
-	slider.value = 100.0
+	slider.value = _bus_volume_percent(bus_name)
 	slider.custom_minimum_size = Vector2(0, 16)
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	slider.value_changed.connect(func(value: float) -> void: _set_bus_volume(bus_name, value))
+	slider.value_changed.connect(func(value: float) -> void:
+		_set_bus_volume(bus_name, value)
+		_store_volume(bus_name, value)
+	)
 	box.add_child(slider)
+	_volume_sliders.append({"slider": slider, "bus": bus_name})
 	return box
 
 
@@ -2472,8 +2511,13 @@ func _open_playtest_setup(from_start: bool) -> void:
 		_playtest_auto.button_pressed = bool(_app.playtest_auto)
 	if _playtest_mouse != null:
 		_playtest_mouse.button_pressed = bool(_app.mouse_keys)
+	if _playtest_latency != null:
+		_playtest_latency.value = float(_app.audio_latency_ms)
+	if _playtest_sfx != null:
+		_playtest_sfx.selected = maxi(0, ["default", "crisp", "deep"].find(_app.hit_sfx_style))
 	if _playtest_bias != null:
 		_playtest_bias.text = "上次平均偏差 %+.1fms" % float(_app.last_bias_ms)
+	_sync_volume_sliders()
 	_playtest_dialog.popup_centered(Vector2i(470, 520))
 
 
@@ -2505,6 +2549,7 @@ func _open_settings() -> void:
 		_build_calibration_rows(box)
 		add_child(_settings_dialog)
 	_refresh_view_menu()
+	_sync_volume_sliders()
 	_settings_dialog.popup_centered_ratio(0.72)
 
 
@@ -2686,6 +2731,33 @@ func _build_playtest_dialog() -> void:
 	_playtest_bias.add_theme_font_size_override("font_size", 11)
 	_playtest_bias.add_theme_color_override("font_color", UITheme.MUTED)
 	box.add_child(_playtest_bias)
+	# 音频：和编辑器「音频」弹窗、设置窗口共用 Music / SFX 总线与持久化字段。
+	var audio_title := Label.new()
+	audio_title.text = "音频"
+	audio_title.add_theme_font_size_override("font_size", 12)
+	box.add_child(audio_title)
+	box.add_child(_volume_slider("音乐", "Music"))
+	box.add_child(_volume_slider("音效", "SFX"))
+	var sfx_row := HBoxContainer.new()
+	sfx_row.add_theme_constant_override("separation", 6)
+	var sfx_label := Label.new()
+	sfx_label.text = "打击音色"
+	sfx_label.custom_minimum_size = Vector2(56, 0)
+	UITheme.style_mono(sfx_label, 12, UITheme.MUTED)
+	sfx_row.add_child(sfx_label)
+	_playtest_sfx = OptionButton.new()
+	for label in ["默认", "清脆", "低沉"]:
+		_playtest_sfx.add_item(label)
+	_playtest_sfx.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_playtest_sfx.item_selected.connect(func(index: int) -> void:
+		_app.hit_sfx_style = ["default", "crisp", "deep"][clampi(index, 0, 2)]
+		_app.save_settings()
+		_sfx.set_style(_app.hit_sfx_style)
+		if _playtest != null:
+			_playtest._sync_sfx_style()
+	)
+	sfx_row.add_child(_playtest_sfx)
+	box.add_child(sfx_row)
 	box.add_child(HSeparator.new())
 	var open_settings := Button.new()
 	open_settings.text = "画质 / 界面 / 音频 / 校准设置…"
